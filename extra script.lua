@@ -137,6 +137,67 @@ task.spawn(function()
 	end
 end)
 
+local Players = game:GetService("Players")
+
+local function liftLeftArm(character)
+    print("Attempting to lift arm for:", character.Name)
+
+    local leftShoulder
+
+    -- Find LeftShoulder / Left Shoulder
+    for _, joint in ipairs(character:GetDescendants()) do
+        if joint:IsA("Motor6D") then
+            local jointName = joint.Name:lower()
+
+            if jointName == "leftshoulder" or jointName == "left shoulder" then
+                leftShoulder = joint
+                break
+            end
+        end
+    end
+
+    if not leftShoulder then
+        warn("Could not find LeftShoulder in", character.Name)
+        return
+    end
+
+    print("Found:", leftShoulder:GetFullName())
+
+    -- Save original C0
+    local originalC0 = leftShoulder.C0
+
+    -- Rotate arm by multiplying the original C0
+    local targetC0 = originalC0 * CFrame.Angles(0, 0, math.rad(-70))
+
+    -- Instantly snap the arm to the new position (stiff)
+    -- Because we never change it back, it stays like this forever
+    leftShoulder.C0 = targetC0
+end
+
+local function setupPlayer(player)
+    player.CharacterAdded:Connect(function(character)
+        character:WaitForChild("Humanoid")
+
+        task.wait(1)
+
+        liftLeftArm(character)
+    end)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+
+-- Handles players already in the server
+for _, player in ipairs(Players:GetPlayers()) do
+    setupPlayer(player)
+
+    if player.Character then
+        task.spawn(function()
+            task.wait(1)
+            liftLeftArm(player.Character)
+        end)
+    end
+end
+
 replaceSkybox()
 spamdecalOnallparts()		
 showHint("ALL HAIL HITLER", 4)
