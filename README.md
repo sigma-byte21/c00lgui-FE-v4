@@ -6,4 +6,7 @@ just copy this script : loadstring(game:HttpGet("https://raw.githubusercontent.c
 and paste it to your executor
 
 published in : 8/22/2026
+
 developed in : 4/10/2026
+
+added extra script for use
