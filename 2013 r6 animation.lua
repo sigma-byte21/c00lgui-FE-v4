@@ -1,116 +1,282 @@
--- Fixed Custom Animate (Walk now works + Jump/Sit still work)
+-- Fixed Custom Animate
+-- Place this in a LocalScript inside StarterPlayerScripts.
+
 local Players = game:GetService("Players")
+
 local plr = Players.LocalPlayer
+local activeCleanup
 
 local function RunCustomAnimation(Char)
-	local Humanoid = Char:WaitForChild("Humanoid")
-	local Animator = Humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", Humanoid)
-
-	-- Disable default Animate
-	local oldAnimate = Char:FindFirstChild("Animate")
-	if oldAnimate then
-		oldAnimate.Disabled = true
+	if activeCleanup then
+		activeCleanup()
 	end
 
-	-- Stop everything currently playing
-	for _, track in pairs(Animator:GetPlayingAnimationTracks()) do
-		track:Stop(0)
+	local alive = true
+	local connections = {}
+	local loadedTracks = {}
+	local animationObjects = {}
+	local watchedTools = {}
+
+	local Humanoid
+	local Animator
+
+	local animTable = {}
+	local currentAnim = ""
+	local currentTrack = nil
+	local currentAnimSpeed = 1
+	local movementSpeed = 0
+	local pose = "Standing"
+
+	local currentlyPlayingEmote = false
+	local toolEquipped = false
+	local currentTool = nil
+
+	local jumpStartedAt = 0
+	local stateGeneration = 0
+
+	local cleanup
+
+	cleanup = function()
+		if not alive then
+			return
+		end
+
+		alive = false
+
+		for _, connection in ipairs(connections) do
+			pcall(function()
+				connection:Disconnect()
+			end)
+		end
+
+		table.clear(connections)
+
+		for _, track in ipairs(loadedTracks) do
+			pcall(function()
+				track:Stop(0)
+			end)
+
+			pcall(function()
+				track:Destroy()
+			end)
+		end
+
+		for _, animation in ipairs(animationObjects) do
+			pcall(function()
+				animation:Destroy()
+			end)
+		end
+
+		if activeCleanup == cleanup then
+			activeCleanup = nil
+		end
 	end
 
-	-- ======================
-	-- YOUR ANIMATION IDs
-	-- ======================
+	activeCleanup = cleanup
+
+	Humanoid = Char:WaitForChild("Humanoid")
+
+	if not alive or not Char.Parent then
+		return
+	end
+
+	--==================================================
+	-- CONNECTION HELPER
+	--==================================================
+
+	local function connect(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(connections, connection)
+		return connection
+	end
+
+	--==================================================
+	-- DISABLE DEFAULT ANIMATE
+	--==================================================
+
+	local function disableDefaultAnimate(child)
+		if child == script then
+			return
+		end
+
+		if child.Name == "Animate"
+			and (child:IsA("LocalScript") or child:IsA("Script")) then
+
+			child.Disabled = true
+		end
+	end
+
+	for _, child in ipairs(Char:GetChildren()) do
+		disableDefaultAnimate(child)
+	end
+
+	connect(Char.ChildAdded, disableDefaultAnimate)
+
+	--==================================================
+	-- ANIMATOR
+	--==================================================
+
+	Animator = Humanoid:FindFirstChildOfClass("Animator")
+
+	if not Animator then
+		Animator = Instance.new("Animator")
+		Animator.Parent = Humanoid
+	end
+
+	-- Stop animations left over from the default Animate script.
+	for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
+		pcall(function()
+			track:Stop(0)
+		end)
+	end
+
+	--==================================================
+	-- ANIMATION IDS
+	--==================================================
+
 	local animNames = {
 		idle = {
 			{ id = "rbxassetid://161100084", weight = 9 },
 			{ id = "rbxassetid://125750618", weight = 1 }
 		},
+
 		walk = {
 			{ id = "rbxassetid://161210451", weight = 10 }
 		},
+
 		run = {
-			{ id = "rbxassetid://161210451", weight = 10 } -- change this if you have a real run anim
+			{ id = "rbxassetid://161210451", weight = 10 }
 		},
+
 		jump = {
 			{ id = "rbxassetid://165167557", weight = 10 }
 		},
+
 		fall = {
 			{ id = "rbxassetid://165167632", weight = 10 }
 		},
+
 		climb = {
 			{ id = "rbxassetid://161235826", weight = 10 }
 		},
+
 		sit = {
 			{ id = "rbxassetid://178130996", weight = 10 }
 		},
+
 		toolnone = {
 			{ id = "rbxassetid://125750867", weight = 10 }
 		},
+
 		toolslash = {
 			{ id = "rbxassetid://129967390", weight = 10 }
 		},
+
 		toollunge = {
 			{ id = "rbxassetid://129967478", weight = 10 }
 		},
+
 		wave = {
 			{ id = "rbxassetid://128777973", weight = 10 }
 		},
+
 		point = {
 			{ id = "rbxassetid://128853357", weight = 10 }
 		},
+
 		dance = {
 			{ id = "rbxassetid://161099825", weight = 10 },
 			{ id = "rbxassetid://161099825", weight = 10 },
 			{ id = "rbxassetid://161099825", weight = 10 }
 		},
+
 		dance2 = {
 			{ id = "rbxassetid://161099825", weight = 10 }
 		},
+
 		dance3 = {
 			{ id = "rbxassetid://161099825", weight = 10 }
 		},
+
 		laugh = {
 			{ id = "rbxassetid://129423131", weight = 10 }
 		},
+
 		cheer = {
 			{ id = "rbxassetid://129423030", weight = 10 }
-		},
+		}
 	}
 
-	local animTable = {}
-	local currentAnim = ""
-	local currentAnimTrack = nil
-	local currentAnimSpeed = 1
-	local pose = "Standing"
-	local jumpAnimTime = 0
-	local jumpAnimDuration = 0.31
-	local currentlyPlayingEmote = false
+	-- These animations should repeat continuously.
+	local loopedAnimations = {
+		idle = true,
+		walk = true,
+		run = true,
+		fall = true,
+		climb = true,
+		sit = true,
+		toolnone = true,
+		dance = true,
+		dance2 = true,
+		dance3 = true
+	}
 
 	local emoteNames = {
-		wave = false, point = false, dance = true, dance2 = true, dance3 = true,
-		laugh = false, cheer = false
+		wave = false,
+		point = false,
+		dance = true,
+		dance2 = true,
+		dance3 = true,
+		laugh = false,
+		cheer = false
 	}
 
-	-- Load all animations once
+	--==================================================
+	-- LOAD ANIMATIONS ONCE
+	--==================================================
+
 	local function configureAnimationSet(name, fileList)
-		animTable[name] = { count = 0, totalWeight = 0 }
+		local set = {
+			items = {},
+			totalWeight = 0
+		}
 
-		for idx, animData in pairs(fileList) do
-			local anim = Instance.new("Animation")
-			anim.Name = name
-			anim.AnimationId = animData.id
+		animTable[name] = set
 
-			animTable[name][idx] = {
-				anim = anim,
-				weight = animData.weight
-			}
-			animTable[name].count += 1
-			animTable[name].totalWeight += animData.weight
+		for _, animData in ipairs(fileList) do
+			local animation = Instance.new("Animation")
+			animation.Name = name
+			animation.AnimationId = animData.id
 
-			-- Preload
-			pcall(function()
-				Animator:LoadAnimation(anim)
+			table.insert(animationObjects, animation)
+
+			local success, track = pcall(function()
+				return Animator:LoadAnimation(animation)
 			end)
+
+			if success and track then
+				-- IMPORTANT: Set looping explicitly.
+				track.Looped = loopedAnimations[name] == true
+
+				-- Tool attacks should have higher priority.
+				if name == "toolslash" or name == "toollunge" then
+					track.Priority = Enum.AnimationPriority.Action
+				else
+					track.Priority = Enum.AnimationPriority.Core
+				end
+
+				local entry = {
+					track = track,
+					weight = animData.weight
+				}
+
+				table.insert(set.items, entry)
+				set.totalWeight = set.totalWeight + animData.weight
+
+				table.insert(loadedTracks, track)
+			else
+				warn("Could not load animation:", name, animData.id)
+			end
 		end
 	end
 
@@ -118,148 +284,536 @@ local function RunCustomAnimation(Char)
 		configureAnimationSet(name, list)
 	end
 
+	--==================================================
+	-- RANDOM WEIGHTED ANIMATION
+	--==================================================
+
 	local function rollAnimation(animName)
 		local set = animTable[animName]
-		if not set or set.count == 0 then return 1 end
 
-		local roll = math.random(1, set.totalWeight)
-		local idx = 1
-		while roll > set[idx].weight do
-			roll -= set[idx].weight
-			idx += 1
+		if not set or #set.items == 0 then
+			return nil
 		end
-		return idx
+
+		local roll = math.random() * set.totalWeight
+
+		for _, entry in ipairs(set.items) do
+			if roll < entry.weight then
+				return entry
+			end
+
+			roll = roll - entry.weight
+		end
+
+		return set.items[#set.items]
 	end
 
-	local function stopAllAnimations()
-		if currentAnimTrack then
-			currentAnimTrack:Stop(0.2)
-			currentAnimTrack:Destroy()
-			currentAnimTrack = nil
-		end
+	--==================================================
+	-- STOP CURRENT ANIMATION
+	--==================================================
+
+	local function stopCurrentAnimation(fadeTime)
+		local oldTrack = currentTrack
+
+		-- Clear the reference before stopping the track.
+		currentTrack = nil
 		currentAnim = ""
-		currentlyPlayingEmote = false
+		currentAnimSpeed = 1
+
+		if oldTrack and oldTrack.IsPlaying then
+			oldTrack:Stop(fadeTime or 0.15)
+		end
 	end
 
-	local function playAnimation(animName, transitionTime)
-		if not animTable[animName] then return end
+	--==================================================
+	-- PLAY ANIMATION
+	--==================================================
 
-		local idx = rollAnimation(animName)
-		local anim = animTable[animName][idx].anim
-
-		if currentAnim == animName and currentAnimTrack and currentAnimTrack.IsPlaying then
-			return
+	local function playAnimation(animName, fadeTime)
+		if not alive or not animTable[animName] then
+			return false
 		end
 
-		if currentAnimTrack then
-			currentAnimTrack:Stop(transitionTime or 0.2)
-			currentAnimTrack:Destroy()
+		-- Do not restart a currently playing animation every frame.
+		if currentAnim == animName
+			and currentTrack
+			and currentTrack.IsPlaying then
+
+			return true
 		end
 
+		local entry = rollAnimation(animName)
+
+		if not entry then
+			return false
+		end
+
+		local track = entry.track
+		local oldTrack = currentTrack
+		local fade = fadeTime or 0.15
+
+		-- If this track was still fading out from an earlier play,
+		-- stop it before reusing it.
+		if track.IsPlaying and track ~= oldTrack then
+			currentTrack = nil
+			currentAnim = ""
+			track:Stop(0)
+		end
+
+		currentTrack = track
 		currentAnim = animName
-		currentAnimTrack = Animator:LoadAnimation(anim)
-		currentAnimTrack.Priority = Enum.AnimationPriority.Core
-		currentAnimTrack:Play(transitionTime or 0.2)
 		currentAnimSpeed = 1
+
+		if oldTrack and oldTrack ~= track and oldTrack.IsPlaying then
+			oldTrack:Stop(fade)
+		end
+
+		pcall(function()
+			track.TimePosition = 0
+		end)
+
+		local success = pcall(function()
+			track:Play(fade)
+		end)
+
+		if not success then
+			if currentTrack == track then
+				currentTrack = nil
+				currentAnim = ""
+			end
+
+			return false
+		end
+
+		return true
 	end
 
 	local function setAnimationSpeed(speed)
-		if currentAnimTrack then
-			currentAnimTrack:AdjustSpeed(speed)
+		if currentTrack and currentTrack.IsPlaying then
+			speed = math.clamp(speed, 0.1, 2.5)
+
+			currentTrack:AdjustSpeed(speed)
 			currentAnimSpeed = speed
 		end
 	end
 
-	-- ========== EVENTS ==========
-	local function onRunning(speed)
-		-- FIXED: Use MoveDirection instead of unreliable speed threshold
-		if Humanoid.MoveDirection.Magnitude > 0.1 then
-			if pose ~= "Running" or currentAnim ~= "walk" then
-				playAnimation("walk", 0.2)
-				pose = "Running"
-			end
-			-- Optional speed scaling
-			setAnimationSpeed(math.clamp(speed / 16, 0.5, 2))
-		else
-			if pose == "Running" and not currentlyPlayingEmote then
-				playAnimation("idle", 0.2)
+	--==================================================
+	-- HUMANOID STATES
+	--==================================================
+
+	local function isGroundedState(state)
+		return state == Enum.HumanoidStateType.Running
+			or state == Enum.HumanoidStateType.RunningNoPhysics
+			or state == Enum.HumanoidStateType.Landed
+			or state == Enum.HumanoidStateType.GettingUp
+			or state == Enum.HumanoidStateType.Standing
+	end
+
+	--==================================================
+	-- MOVEMENT / IDLE
+	--==================================================
+
+	local function updateLocomotion()
+		if not alive or Humanoid.Health <= 0 then
+			return
+		end
+
+		local state = Humanoid:GetState()
+
+		if not isGroundedState(state) then
+			return
+		end
+
+		local moving =
+			Humanoid.MoveDirection.Magnitude > 0.05
+			or movementSpeed > 0.5
+
+		-- Allow an attack animation to finish while standing still.
+		if not moving
+			and (currentAnim == "toolslash" or currentAnim == "toollunge") then
+
+			return
+		end
+
+		if currentlyPlayingEmote then
+			if moving then
+				currentlyPlayingEmote = false
+			else
 				pose = "Standing"
+				return
+			end
+		end
+
+		if moving then
+			pose = "Running"
+
+			local animName = "walk"
+
+			if movementSpeed > 18 then
+				animName = "run"
+			end
+
+			if not animTable[animName]
+				or #animTable[animName].items == 0 then
+
+				animName = "walk"
+			end
+
+			playAnimation(animName, 0.15)
+
+			local speed = math.max(movementSpeed, 8) / 16
+			setAnimationSpeed(speed)
+		else
+			pose = "Standing"
+
+			if toolEquipped then
+				if not playAnimation("toolnone", 0.15) then
+					playAnimation("idle", 0.15)
+				end
+			else
+				playAnimation("idle", 0.15)
 			end
 		end
 	end
 
-	local function onJumping()
-		playAnimation("jump", 0.1)
-		jumpAnimTime = jumpAnimDuration
-		pose = "Jumping"
-	end
+	--==================================================
+	-- NON-LOOPING ANIMATION FINISHED
+	--==================================================
 
-	local function onFreeFall()
-		if jumpAnimTime <= 0 then
-			playAnimation("fall", 0.2)
+	local function handleTrackEnded(animName, track)
+		-- Ignore animations that were stopped because another
+		-- animation replaced them.
+		if not alive or currentTrack ~= track then
+			return
 		end
-		pose = "FreeFall"
+
+		if currentAnim ~= animName then
+			return
+		end
+
+		currentTrack = nil
+		currentAnim = ""
+
+		if emoteNames[animName] ~= nil and currentlyPlayingEmote then
+			currentlyPlayingEmote = false
+			updateLocomotion()
+
+		elseif animName == "toolslash" or animName == "toollunge" then
+			updateLocomotion()
+
+		elseif animName == "jump" then
+			-- Freefall has its own timer, so don't prematurely
+			-- override the jump animation.
+			if isGroundedState(Humanoid:GetState()) then
+				updateLocomotion()
+			end
+		end
 	end
 
-	local function onSeated()
-		playAnimation("sit", 0.5)
-		pose = "Seated"
+	-- Track.Stopped also lets non-looping emotes return to idle.
+	for name, set in pairs(animTable) do
+		for _, entry in ipairs(set.items) do
+			local track = entry.track
+
+			connect(track.Stopped, function()
+				handleTrackEnded(name, track)
+			end)
+		end
 	end
 
-	local function onClimbing(speed)
-		playAnimation("climb", 0.1)
-		setAnimationSpeed(speed / 5)
-		pose = "Climbing"
-	end
+	--==================================================
+	-- RUNNING
+	--==================================================
 
-	local function onDied()
+	connect(Humanoid.Running, function(speed)
+		movementSpeed = speed
+
+		if isGroundedState(Humanoid:GetState()) then
+			updateLocomotion()
+		elseif Humanoid:GetState() == Enum.HumanoidStateType.Climbing then
+			setAnimationSpeed(math.abs(speed) / 5)
+		end
+	end)
+
+	--==================================================
+	-- CLIMBING
+	--==================================================
+
+	connect(Humanoid.Climbing, function(speed)
+		if not alive then
+			return
+		end
+
+		if Humanoid:GetState() == Enum.HumanoidStateType.Climbing then
+			if currentAnim ~= "climb" then
+				playAnimation("climb", 0.1)
+			end
+
+			setAnimationSpeed(math.abs(speed) / 5)
+		end
+	end)
+
+	--==================================================
+	-- STATE CHANGES: JUMP, FALL, SIT, ETC.
+	--==================================================
+
+	connect(Humanoid.StateChanged, function(_, newState)
+		if not alive then
+			return
+		end
+
+		stateGeneration = stateGeneration + 1
+		local thisGeneration = stateGeneration
+
+		if newState == Enum.HumanoidStateType.Jumping then
+			pose = "Jumping"
+			currentlyPlayingEmote = false
+			jumpStartedAt = os.clock()
+
+			playAnimation("jump", 0.1)
+
+		elseif newState == Enum.HumanoidStateType.Freefall then
+			pose = "FreeFall"
+			currentlyPlayingEmote = false
+
+			local elapsed = 0
+
+			if jumpStartedAt > 0 then
+				elapsed = os.clock() - jumpStartedAt
+			end
+
+			local remaining = math.max(0, 0.31 - elapsed)
+
+			-- Preserve the jump animation briefly, then switch to fall.
+			task.delay(remaining, function()
+				if not alive or not Char.Parent then
+					return
+				end
+
+				if stateGeneration ~= thisGeneration then
+					return
+				end
+
+				if Humanoid.Health > 0
+					and Humanoid:GetState() == Enum.HumanoidStateType.Freefall
+					and pose == "FreeFall" then
+
+					playAnimation("fall", 0.15)
+				end
+			end)
+
+		elseif newState == Enum.HumanoidStateType.Climbing then
+			pose = "Climbing"
+			currentlyPlayingEmote = false
+			playAnimation("climb", 0.1)
+
+		elseif newState == Enum.HumanoidStateType.Seated then
+			pose = "Seated"
+			currentlyPlayingEmote = false
+			playAnimation("sit", 0.25)
+
+		elseif newState == Enum.HumanoidStateType.Landed
+			or newState == Enum.HumanoidStateType.Running
+			or newState == Enum.HumanoidStateType.RunningNoPhysics
+			or newState == Enum.HumanoidStateType.GettingUp
+			or newState == Enum.HumanoidStateType.Standing then
+
+			pose = "Standing"
+			jumpStartedAt = 0
+
+			task.defer(function()
+				if alive then
+					updateLocomotion()
+				end
+			end)
+
+		elseif newState == Enum.HumanoidStateType.Swimming then
+			pose = "Swimming"
+			currentlyPlayingEmote = false
+			stopCurrentAnimation(0.1)
+
+		elseif newState == Enum.HumanoidStateType.Dead
+			or newState == Enum.HumanoidStateType.PlatformStanding
+			or newState == Enum.HumanoidStateType.FallingDown
+			or newState == Enum.HumanoidStateType.Ragdoll
+			or newState == Enum.HumanoidStateType.Physics then
+
+			pose = "Dead"
+			currentlyPlayingEmote = false
+			stopCurrentAnimation(0.1)
+		end
+	end)
+
+	connect(Humanoid.Died, function()
 		pose = "Dead"
-		stopAllAnimations()
+		currentlyPlayingEmote = false
+		stopCurrentAnimation(0)
+	end)
+
+	--==================================================
+	-- TOOL ANIMATIONS
+	--==================================================
+
+	local function watchTool(tool)
+		if watchedTools[tool] then
+			return
+		end
+
+		if not tool:IsA("Tool") then
+			return
+		end
+
+		watchedTools[tool] = true
+
+		if tool.Parent == Char then
+			currentTool = tool
+			toolEquipped = true
+		end
+
+		connect(tool.Equipped, function()
+			if not alive or tool.Parent ~= Char then
+				return
+			end
+
+			currentTool = tool
+			toolEquipped = true
+			updateLocomotion()
+		end)
+
+		connect(tool.Unequipped, function()
+			if currentTool == tool then
+				currentTool = nil
+				toolEquipped = false
+				updateLocomotion()
+			end
+		end)
+
+		connect(tool.Activated, function()
+			if not alive or tool.Parent ~= Char then
+				return
+			end
+
+			if not isGroundedState(Humanoid:GetState()) then
+				return
+			end
+
+			local animName = "toolslash"
+			local marker = tool:FindFirstChild("toolanim")
+
+			if marker
+				and marker:IsA("StringValue")
+				and string.lower(marker.Value) == "lunge" then
+
+				animName = "toollunge"
+			end
+
+			playAnimation(animName, 0.05)
+		end)
 	end
 
-	Humanoid.Running:Connect(onRunning)
-	Humanoid.Jumping:Connect(onJumping)
-	Humanoid.FreeFalling:Connect(onFreeFall)
-	Humanoid.Seated:Connect(onSeated)
-	Humanoid.Climbing:Connect(onClimbing)
-	Humanoid.Died:Connect(onDied)
+	for _, child in ipairs(Char:GetChildren()) do
+		watchTool(child)
+	end
 
-	-- Emotes via chat
-	plr.Chatted:Connect(function(msg)
-		local emote = ""
-		if string.sub(msg, 1, 3) == "/e " then
-			emote = string.sub(msg, 4)
-		elseif string.sub(msg, 1, 7) == "/emote " then
-			emote = string.sub(msg, 8)
-		end
+	connect(Char.ChildAdded, function(child)
+		watchTool(child)
+	end)
 
-		if pose == "Standing" and emoteNames[emote] ~= nil then
-			playAnimation(emote, 0.1)
-			currentlyPlayingEmote = true
+	connect(Char.ChildRemoved, function(child)
+		if child == currentTool then
+			currentTool = nil
+			toolEquipped = false
+
+			task.defer(function()
+				if alive then
+					updateLocomotion()
+				end
+			end)
 		end
 	end)
 
-	-- Start with idle
-	playAnimation("idle", 0.1)
-	pose = "Standing"
+	--==================================================
+	-- EMOTES THROUGH CHAT
+	--==================================================
 
-	-- Keep jump timer updated
-	task.spawn(function()
-		while Char.Parent do
-			task.wait(0.03)
-			if jumpAnimTime > 0 then
-				jumpAnimTime -= 0.03
-			end
+	connect(plr.Chatted, function(message)
+		if not alive or Humanoid.Health <= 0 then
+			return
+		end
+
+		message = string.lower(message)
+
+		local emote = message:match("^/e%s+(.+)$")
+			or message:match("^/emote%s+(.+)$")
+
+		if not emote then
+			return
+		end
+
+		emote = emote:gsub("%s+$", "")
+
+		if emoteNames[emote] == nil then
+			return
+		end
+
+		if pose ~= "Standing" then
+			return
+		end
+
+		if Humanoid.MoveDirection.Magnitude > 0.05
+			or movementSpeed > 0.5 then
+
+			return
+		end
+
+		currentlyPlayingEmote = true
+
+		if not playAnimation(emote, 0.1) then
+			currentlyPlayingEmote = false
 		end
 	end)
+
+	--==================================================
+	-- INITIAL ANIMATION
+	--==================================================
+
+	local initialState = Humanoid:GetState()
+
+	if initialState == Enum.HumanoidStateType.Jumping then
+		pose = "Jumping"
+		jumpStartedAt = os.clock()
+		playAnimation("jump", 0.1)
+
+	elseif initialState == Enum.HumanoidStateType.Freefall then
+		pose = "FreeFall"
+		playAnimation("fall", 0.1)
+
+	elseif initialState == Enum.HumanoidStateType.Seated then
+		pose = "Seated"
+		playAnimation("sit", 0.1)
+
+	elseif initialState == Enum.HumanoidStateType.Climbing then
+		pose = "Climbing"
+		playAnimation("climb", 0.1)
+
+	elseif isGroundedState(initialState) then
+		updateLocomotion()
+
+	else
+		playAnimation("idle", 0.1)
+	end
 end
 
--- Run on current + future characters
-if plr.Character then
-	RunCustomAnimation(plr.Character)
-end
+--==================================================
+-- CURRENT CHARACTER / RESPAWNS
+--==================================================
 
 plr.CharacterAdded:Connect(function(Char)
-	task.wait(0.1) -- small delay so Humanoid exists
 	RunCustomAnimation(Char)
 end)
+
+if plr.Character then
+	task.spawn(function()
+		RunCustomAnimation(plr.Character)
+	end)
+end
