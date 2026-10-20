@@ -549,7 +549,7 @@ local function RunCustomAnimation(Char)
 				playAnimation("climb", 0.1)
 			end
 
-			setAnimationSpeed(math.abs(speed) / 5)
+			setAnimationSpeed(math.abs(speed) / 12)
 		end
 	end)
 
